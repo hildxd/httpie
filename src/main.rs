@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
+use anyhow::{anyhow, Ok, Result};
 use clap::Parser;
-use anyhow::{ Result, anyhow };
-use reqwest::Url;
+use mime::Mime;
+use reqwest::{header, Client, Url, Response};
 
 /// a naive implementation of the `httpie` command
 #[derive(Parser, Debug)]
@@ -18,7 +21,6 @@ struct Get {
     #[arg(value_parser = parse_url)]
     url: String,
 }
-
 
 /// send post request
 #[derive(Parser, Debug)]
@@ -47,10 +49,58 @@ fn parse_kv_pair(s: &str) -> Result<KvPair> {
 }
 
 fn parse_url(s: &str) -> Result<String> {
-    let url:Url = s.parse()?;
+    let url: Url = s.parse()?;
     Ok(url.into())
 }
-fn main() {
+
+async fn get(client: Client, args: &Get) -> Result<()> {
+    let resp = client.get(&args.url).send().await?;
+    println!("{:?}", resp);
+    Ok(())
+}
+
+async fn post(client: Client, args: &Post) -> Result<()> {
+    let mut body = HashMap::new();
+    for pair in args.body.iter() {
+        body.insert(&pair.key, &pair.value);
+    }
+    let resp = client
+        .post(&args.url)
+        .json(&body)
+        .send()
+        .await?;
+    println!("{:?}", resp);
+    Ok(())
+}
+
+async fn print_resp(resp: Response) -> Result<()> {
+    let mime = get_content_type(&resp);
+    let body = resp.text().await?;
+    Ok(())
+}
+
+/// 将服务器返回的 content-type 解析成 Mime 类型
+fn get_content_type(resp: &Response) -> Option<Mime> {
+    resp.headers()
+        .get(header::CONTENT_TYPE)
+        .map(|v| v.to_str().unwrap().parse().unwrap())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     let opts = Httpie::parse();
-    println!("{:?}", opts);
+    let mut headers = header::HeaderMap::new();
+    headers.insert("X-POWERED-BY", "Rust".parse()?);
+    headers.insert(
+        header::USER_AGENT,
+        header::HeaderValue::from_static("httpie"),
+    );
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+    let result = match opts {
+        Httpie::Get(ref args) => get(client, args).await?,
+        Httpie::Post(ref args) => post(client, args).await?,
+    };
+    Ok(result)
 }
